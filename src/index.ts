@@ -1,4 +1,5 @@
 import { Client, Configuration, Query, Notification } from 'ts-postgres';
+import createSubscriber from "pg-listen"
 
 const config: Configuration = {
   host: process.env.POSTGRES_HOST,
@@ -7,8 +8,17 @@ const config: Configuration = {
   password: process.env.POSTGRES_PASSWORD,
 };
 
+const databaseURL = `postgres://${config.user}:${config.password}@${config.host}:5432/${config.database}`
+const subscriber = createSubscriber({ connectionString: databaseURL })
 
 async function main() {
+
+  const eventName = "db_event";
+  await subscriber.connect();
+  await subscriber.listenTo(eventName);
+  subscriber.notifications.on(eventName, async (data) => {
+    console.log(data);
+  });
 
   console.log('config :>> ', config);
 
@@ -54,17 +64,17 @@ async function main() {
         payload := json_build_object('timestamp',CURRENT_TIMESTAMP,'action',LOWER(TG_OP),'db_schema',TG_TABLE_SCHEMA,'table',TG_TABLE_NAME,'record',row_to_json(rec), 'old',row_to_json(dat));
 
         -- Notify the channel
-        PERFORM pg_notify('db_event', payload);
+        PERFORM pg_notify('${eventName}', payload);
 
         RETURN rec;
       END;
       $trigger$ LANGUAGE plpgsql;`,
 
-      `CREATE OR REPLACE TRIGGER ${table}_notify
+      `
+      CREATE OR REPLACE TRIGGER ${table}_notify
       AFTER INSERT OR UPDATE OR DELETE
       ON ${table}
-      FOR EACH ROW 
-      EXECUTE FUNCTION notify_trigger();`
+      FOR EACH ROW EXECUTE PROCEDURE notify_trigger();`
       ];
     };
 
@@ -96,9 +106,9 @@ async function main() {
   `);
 
     // 更新使用者的姓名
-  //   await client.query(`
-  //   UPDATE users SET name = 'Jane Doe' WHERE id = 1;
-  // `);
+    await client.query(`
+    UPDATE users SET name = 'Jane Doe' WHERE id = 1;
+  `);
 
     // 刪除使用者
   //   await client.query(`
@@ -110,6 +120,8 @@ async function main() {
   } catch (error) {
     console.log('error :>> ', error);
   } finally {
+    await subscriber.unlistenAll();
+    await subscriber.close();
     await client.end();
   }
 
